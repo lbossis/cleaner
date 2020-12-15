@@ -17,8 +17,13 @@
  */
 package org.jboss.pnc.cleaner.temporaryBuilds;
 
+import io.prometheus.client.Counter;
+
 import lombok.extern.slf4j.Slf4j;
+
 import org.eclipse.microprofile.config.Config;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
 import org.jboss.pnc.client.BuildClient;
 import org.jboss.pnc.client.GroupBuildClient;
 import org.jboss.pnc.client.RemoteCollection;
@@ -30,6 +35,8 @@ import org.jboss.pnc.dto.GroupBuild;
 import javax.annotation.PostConstruct;
 import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -47,6 +54,15 @@ import java.util.Optional;
 @ApplicationScoped
 @Slf4j
 public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleanerAdapter {
+    static final Counter errors_total = Counter.build()
+            .name("TemporaryBuildsCleanerAdapterImpl_Errors_Total")
+            .help("Errors counting metric")
+            .register();
+
+    static final Counter warnings_total = Counter.build()
+            .name("TemporaryBuildsCleanerAdapterImpl_Warnings_Total")
+            .help("Warnings counting metric")
+            .register();
 
     private String BASE_DELETE_BUILD_CALLBACK_URL;
 
@@ -84,6 +100,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                     .getAllIndependentTempBuildsOlderThanTimestamp(expirationDate.getTime());
             remoteCollection.forEach(buildsRest::add);
         } catch (RemoteResourceException e) {
+            warnings_total.inc();
             log.warn(
                     "Querying of temporary builds from Orchestrator failed with [status: {}, errorResponse: {}]",
                     e.getStatus(),
@@ -104,6 +121,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
                 return;
             } else {
+                errors_total.inc();
                 throw new OrchInteractionException(
                         String.format(
                                 "Deletion of a build %s failed! " + "Orchestrator"
@@ -121,6 +139,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                             e.getStatus()),
                     e);
         } catch (InterruptedException e) {
+            errors_total.inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format("Deletion of a build %s failed! Wait operation " + "failed with an exception.", id),
@@ -139,6 +158,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             remoteCollection.forEach(build -> groupBuilds.add(build));
 
         } catch (RemoteResourceException e) {
+            warnings_total.inc();
             log.warn(
                     "Querying of temporary group builds from Orchestrator failed with [status: {}, errorResponse: "
                             + "{}]",
@@ -160,6 +180,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
                 return;
             } else {
+                errors_total.inc();
                 throw new OrchInteractionException(
                         String.format(
                                 "Deletion of a group build %s failed! " + "Orchestrator"
@@ -169,6 +190,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             }
 
         } catch (RemoteResourceException e) {
+            errors_total.inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format(
@@ -177,6 +199,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                             e.getStatus()),
                     e);
         } catch (InterruptedException e) {
+            errors_total.inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format(
@@ -190,5 +213,22 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
         return DateTimeFormatter.ISO_DATE_TIME.withLocale(Locale.ROOT)
                 .withZone(ZoneId.of("UTC"))
                 .format(Instant.ofEpochMilli(expirationDate.getTime()));
+    }
+
+    @GET
+    @Produces("text/plain")
+    @Gauge(name = "TemporaryBuildsCleanerAdapterImpl_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showTotalErrors() {
+        return (int) errors_total.get();
+    }
+
+    @GET
+    @Produces("text/plain")
+    @Gauge(
+            name = "TemporaryBuildsCleanerAdapterImpl_Warn_Count",
+            unit = MetricUnits.NONE,
+            description = "Warnings count")
+    public int showTotalWarnings() {
+        return (int) warnings_total.get();
     }
 }

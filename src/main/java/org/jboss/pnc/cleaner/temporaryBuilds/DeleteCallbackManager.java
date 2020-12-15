@@ -17,11 +17,19 @@
  */
 package org.jboss.pnc.cleaner.temporaryBuilds;
 
+import io.prometheus.client.Counter;
+import io.prometheus.client.Summary;
+
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.ConcurrentGauge;
 import org.jboss.pnc.dto.response.DeleteOperationResult;
 
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -36,6 +44,20 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 public class DeleteCallbackManager {
+    static final Counter errors_total = Counter.build()
+            .name("DeleteCallbackManager_Errors_Total")
+            .help("Errors counting metric")
+            .register();
+
+    static final Counter warnings_total = Counter.build()
+            .name("DeleteCallbackManager_Warnings_Total")
+            .help("Warnings counting metric")
+            .register();
+
+    static final Summary requestLatency = Summary.build()
+            .name("DeleteCallbackManager_Requests_Latency")
+            .help("Request latency in seconds")
+            .register();
 
     private Map<String, CallbackData> buildsMap = new ConcurrentHashMap<>();
 
@@ -70,6 +92,7 @@ public class DeleteCallbackManager {
             callbackData.setCallbackResponse(result);
             callbackData.getCountDownLatch().countDown();
         } else {
+            warnings_total.inc();
             log.warn(
                     "Delete operation callback called for a delete operation, which was not initialized. BuildId: "
                             + "{}",
@@ -85,8 +108,10 @@ public class DeleteCallbackManager {
      * @throws InterruptedException Thrown if an error occurs while waiting for callback
      */
     public DeleteOperationResult await(String buildId) throws InterruptedException {
+        Summary.Timer requestTimer = requestLatency.startTimer();
         CallbackData callbackData = buildsMap.get(buildId);
         if (callbackData == null) {
+            errors_total.inc();
             throw new IllegalArgumentException(
                     "Await operation triggered for a build, which was not initiated using "
                             + "method initializeHandler. This method must be called first!");
@@ -94,7 +119,9 @@ public class DeleteCallbackManager {
 
         callbackData.getCountDownLatch().await(MAX_WAIT_TIME, TimeUnit.SECONDS);
         buildsMap.remove(buildId);
-        return callbackData.getCallbackResponse();
+        DeleteOperationResult rc = callbackData.getCallbackResponse();
+        requestTimer.observeDuration();
+        return rc;
     }
 
     public void cancel(String buildId) {
@@ -107,5 +134,19 @@ public class DeleteCallbackManager {
         private DeleteOperationResult callbackResponse = null;
 
         private final CountDownLatch countDownLatch = new CountDownLatch(1);
+    }
+
+    @GET
+    @Produces("text/plain")
+    @ConcurrentGauge(name = "DeleteCallbackManager_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int errCount() {
+        return (int) errors_total.get();
+    }
+
+    @GET
+    @Produces("text/plain")
+    @ConcurrentGauge(name = "DeleteCallbackManager_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int warnCount() {
+        return (int) warnings_total.get();
     }
 }
