@@ -17,7 +17,11 @@
  */
 package org.jboss.pnc.cleaner.temporaryBuilds;
 
+import io.prometheus.client.Counter;
+import io.prometheus.client.Summary;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
 import org.jboss.pnc.common.util.TimeUtils;
 import org.jboss.pnc.dto.Build;
 import org.jboss.pnc.dto.GroupBuild;
@@ -26,6 +30,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
@@ -38,6 +44,17 @@ import java.util.Set;
  */
 @ApplicationScoped
 public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
+    static final Counter exceptionsTotal = Counter.build()
+            .name("TemporaryBuildsCleanerImpl_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
+
+    static final Summary requestLatency = Summary.build()
+            .name("TemporaryBuildsCleanerImpl_Requests_Latency")
+            .help("Request latency in seconds")
+            .labelNames("expired_build_records_type")
+            .register();
 
     private final Logger log = LoggerFactory.getLogger(TemporaryBuildsCleanerImpl.class);
 
@@ -61,6 +78,7 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
     }
 
     void deleteExpiredBuildConfigSetRecords(Date expirationThreshold) {
+        Summary.Timer requestTimer = requestLatency.labels("config_set_records").startTimer();
         Collection<GroupBuild> expiredBCSRecords = temporaryBuildsCleanerAdapter
                 .findTemporaryGroupBuildsOlderThan(expirationThreshold);
 
@@ -70,12 +88,15 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
                 temporaryBuildsCleanerAdapter.deleteTemporaryGroupBuild(groupBuild.getId());
                 log.info("Temporary BuildConfigSetRecord {} was deleted successfully", groupBuild);
             } catch (OrchInteractionException ex) {
+                exceptionsTotal.labels("warning").inc();
                 log.warn("Deletion of temporary BuildConfigSetRecord {} failed!", groupBuild);
             }
         }
+        requestTimer.observeDuration();
     }
 
     void deleteExpiredBuildRecords(Date expirationThreshold) {
+        Summary.Timer requestTimer = requestLatency.labels("records").startTimer();
         Set<Build> failedBuilds = new HashSet<>();
         Collection<Build> expiredBuilds = null;
         do {
@@ -88,11 +109,20 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
                     temporaryBuildsCleanerAdapter.deleteTemporaryBuild(build.getId());
                     log.info("Temporary build {} was deleted successfully", build);
                 } catch (OrchInteractionException ex) {
+                    exceptionsTotal.labels("warning").inc();
                     log.warn("Deletion of temporary build {} failed! Cause: {}", build, ex);
                     failedBuilds.add(build);
                 }
             }
         } while (!expiredBuilds.isEmpty());
 
+        requestTimer.observeDuration();
+    }
+
+    @GET
+    @Produces("text/plain")
+    @Gauge(name = "TemporaryBuildsCleanerImpl_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }
