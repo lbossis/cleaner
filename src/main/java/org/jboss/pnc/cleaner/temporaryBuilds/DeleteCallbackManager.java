@@ -44,14 +44,10 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 public class DeleteCallbackManager {
-    static final Counter errors_total = Counter.build()
-            .name("DeleteCallbackManager_Errors_Total")
-            .help("Errors counting metric")
-            .register();
-
-    static final Counter warnings_total = Counter.build()
-            .name("DeleteCallbackManager_Warnings_Total")
-            .help("Warnings counting metric")
+    static final Counter exceptionsTotal = Counter.build()
+            .name("DeleteCallbackManager_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
             .register();
 
     static final Summary requestLatency = Summary.build()
@@ -92,7 +88,7 @@ public class DeleteCallbackManager {
             callbackData.setCallbackResponse(result);
             callbackData.getCountDownLatch().countDown();
         } else {
-            warnings_total.inc();
+            exceptionsTotal.labels("warning").inc();
             log.warn(
                     "Delete operation callback called for a delete operation, which was not initialized. BuildId: "
                             + "{}",
@@ -111,7 +107,7 @@ public class DeleteCallbackManager {
         Summary.Timer requestTimer = requestLatency.startTimer();
         CallbackData callbackData = buildsMap.get(buildId);
         if (callbackData == null) {
-            errors_total.inc();
+            exceptionsTotal.labels("error").inc();
             throw new IllegalArgumentException(
                     "Await operation triggered for a build, which was not initiated using "
                             + "method initializeHandler. This method must be called first!");
@@ -139,14 +135,14 @@ public class DeleteCallbackManager {
     @GET
     @Produces("text/plain")
     @ConcurrentGauge(name = "DeleteCallbackManager_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
-    public int errCount() {
-        return (int) errors_total.get();
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
     }
 
     @GET
     @Produces("text/plain")
     @ConcurrentGauge(name = "DeleteCallbackManager_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
-    public int warnCount() {
-        return (int) warnings_total.get();
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }

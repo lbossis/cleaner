@@ -54,14 +54,10 @@ import java.util.Optional;
 @ApplicationScoped
 @Slf4j
 public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleanerAdapter {
-    static final Counter errors_total = Counter.build()
-            .name("TemporaryBuildsCleanerAdapterImpl_Errors_Total")
-            .help("Errors counting metric")
-            .register();
-
-    static final Counter warnings_total = Counter.build()
-            .name("TemporaryBuildsCleanerAdapterImpl_Warnings_Total")
-            .help("Warnings counting metric")
+    static final Counter exceptionsTotal = Counter.build()
+            .name("TemporaryBuildsCleanerAdapterImpl_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
             .register();
 
     private String BASE_DELETE_BUILD_CALLBACK_URL;
@@ -100,7 +96,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                     .getAllIndependentTempBuildsOlderThanTimestamp(expirationDate.getTime());
             remoteCollection.forEach(buildsRest::add);
         } catch (RemoteResourceException e) {
-            warnings_total.inc();
+            exceptionsTotal.labels("warning").inc();
             log.warn(
                     "Querying of temporary builds from Orchestrator failed with [status: {}, errorResponse: {}]",
                     e.getStatus(),
@@ -121,7 +117,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
                 return;
             } else {
-                errors_total.inc();
+                exceptionsTotal.labels("error").inc();
                 throw new OrchInteractionException(
                         String.format(
                                 "Deletion of a build %s failed! " + "Orchestrator"
@@ -139,7 +135,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                             e.getStatus()),
                     e);
         } catch (InterruptedException e) {
-            errors_total.inc();
+            exceptionsTotal.labels("error").inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format("Deletion of a build %s failed! Wait operation " + "failed with an exception.", id),
@@ -158,7 +154,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             remoteCollection.forEach(build -> groupBuilds.add(build));
 
         } catch (RemoteResourceException e) {
-            warnings_total.inc();
+            exceptionsTotal.labels("warning").inc();
             log.warn(
                     "Querying of temporary group builds from Orchestrator failed with [status: {}, errorResponse: "
                             + "{}]",
@@ -180,7 +176,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
                 return;
             } else {
-                errors_total.inc();
+                exceptionsTotal.labels("error").inc();
                 throw new OrchInteractionException(
                         String.format(
                                 "Deletion of a group build %s failed! " + "Orchestrator"
@@ -190,7 +186,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             }
 
         } catch (RemoteResourceException e) {
-            errors_total.inc();
+            exceptionsTotal.labels("error").inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format(
@@ -199,7 +195,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                             e.getStatus()),
                     e);
         } catch (InterruptedException e) {
-            errors_total.inc();
+            exceptionsTotal.labels("error").inc();
             buildDeleteCallbackManager.cancel(id);
             throw new OrchInteractionException(
                     String.format(
@@ -218,8 +214,8 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
     @GET
     @Produces("text/plain")
     @Gauge(name = "TemporaryBuildsCleanerAdapterImpl_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
-    public int showTotalErrors() {
-        return (int) errors_total.get();
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
     }
 
     @GET
@@ -228,7 +224,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             name = "TemporaryBuildsCleanerAdapterImpl_Warn_Count",
             unit = MetricUnits.NONE,
             description = "Warnings count")
-    public int showTotalWarnings() {
-        return (int) warnings_total.get();
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }
