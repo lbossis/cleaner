@@ -1,5 +1,7 @@
 package org.jboss.pnc.cleaner.builds;
 
+import io.prometheus.client.Counter;
+import io.prometheus.client.Summary;
 import io.quarkus.scheduler.Scheduled;
 
 import org.commonjava.indy.client.core.Indy;
@@ -18,7 +20,11 @@ import org.commonjava.indy.model.core.io.IndyObjectMapper;
 import org.commonjava.util.jhttpc.model.SiteConfig;
 import org.commonjava.util.jhttpc.model.SiteConfigBuilder;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
 import org.jboss.pnc.cleaner.auth.KeycloakServiceClient;
+import org.jboss.pnc.cleaner.common.LatencyMap;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.jboss.pnc.client.BuildClient;
 import org.jboss.pnc.client.RemoteCollection;
 import org.jboss.pnc.client.RemoteResourceException;
@@ -31,6 +37,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 
 import java.text.MessageFormat;
 import java.time.Instant;
@@ -48,6 +57,21 @@ import static org.commonjava.indy.pkg.maven.model.MavenPackageTypeDescriptor.MAV
 
 @ApplicationScoped
 public class FailedBuildsCleaner {
+    static final Counter exceptionsTotal = Counter.build()
+            .name("FailedBuildsCleaner_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
+
+    static final Summary requestLatency = Summary.build()
+            .name("FailedBuildsCleaner_Requests_Latency")
+            .help("Request latency in seconds")
+            .labelNames("key")
+            .register();
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
+
+    static final String className = "FailedBuildsCleaner";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
@@ -93,6 +117,8 @@ public class FailedBuildsCleaner {
      * @param limit point in time marking the line which builds should be deleted
      */
     public void cleanOlder(Instant limit) {
+        Summary.Timer requestTimer = requestLatency.labels("cleanOlder").startTimer();
+
         logger.info("Retrieving service account auth token.");
         String serviceAccountToken = serviceClient.getAuthToken();
 
@@ -108,6 +134,11 @@ public class FailedBuildsCleaner {
         for (String groupName : groupNames) {
             cleanBuildIfNeeded(groupName, session);
         }
+
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_cleanOlder");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
     }
 
     /**
@@ -117,6 +148,8 @@ public class FailedBuildsCleaner {
      * @return
      */
     Indy initIndy(String accessToken) {
+        Summary.Timer requestTimer = requestLatency.labels("initIndy").startTimer();
+
         IndyClientAuthenticator authenticator = null;
         if (accessToken != null) {
             logger.debug("Creating Indy authenticator.");
@@ -133,8 +166,14 @@ public class FailedBuildsCleaner {
                     new IndyFoloContentClientModule() };
 
             Map<String, String> mdcCopyMappings = new HashMap<>(); // TODO fill in these if needed
-            return new Indy(siteConfig, authenticator, new IndyObjectMapper(true), mdcCopyMappings, modules);
+            Indy res = new Indy(siteConfig, authenticator, new IndyObjectMapper(true), mdcCopyMappings, modules);
+            LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_initIndy");
+            if (lcyMap != null) {
+                lcyMap.update(requestTimer.observeDuration());
+            }
+            return res;
         } catch (IndyClientException e) {
+            exceptionsTotal.labels("error").inc();
             throw new IllegalStateException("Failed to create Indy client: " + e.getMessage(), e);
         }
     }
@@ -146,6 +185,8 @@ public class FailedBuildsCleaner {
      * @return the loaded list of group names, can be empty, never <code>null</code>
      */
     List<String> getGroupNames(FailedBuildsCleanerSession session) {
+        Summary.Timer requestTimer = requestLatency.labels("getGroupNames").startTimer();
+
         Pattern pattern = Pattern.compile("build(-\\d+|_.+_\\d{8}\\.\\d{4})");
         IndyStoresClientModule indyStores = session.getStores();
 
@@ -153,17 +194,24 @@ public class FailedBuildsCleaner {
         try {
             StoreListingDTO<Group> groupsListing = indyStores.listGroups(MAVEN_PKG_KEY);
             if (groupsListing == null) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException(
                         "Error getting Maven group list from Indy. The result " + "was empty. Check Indy URL.");
             }
             groups = groupsListing.getItems();
         } catch (IndyClientException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Error getting Maven group list from Indy: " + e.toString(), e);
         }
         List<String> result = groups.stream()
                 .map(g -> g.getName())
                 .filter(n -> pattern.matcher(n).matches())
                 .collect(Collectors.toList());
+
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_getGroupNames");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
         return result;
     }
 
@@ -176,6 +224,8 @@ public class FailedBuildsCleaner {
      * @param session cleaner session
      */
     void cleanBuildIfNeeded(String groupName, FailedBuildsCleanerSession session) {
+        Summary.Timer requestTimer = requestLatency.labels("cleanBuildIfNeeded").startTimer();
+
         logger.debug("Loading build record for group {}.", groupName);
         try {
             boolean clean = shouldClean(groupName, session);
@@ -200,12 +250,19 @@ public class FailedBuildsCleaner {
                     IndyFoloAdminClientModule foloAdmin = session.getFoloAdmin();
                     logger.debug("Cleaning tracking record {} (if present).", groupName);
                     foloAdmin.clearTrackingRecord(groupName);
+
+                    LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_cleanBuildIfNeeded");
+                    if (lcyMap != null) {
+                        lcyMap.update(requestTimer.observeDuration());
+                    }
                 } catch (IndyClientException e) {
+                    exceptionsTotal.labels("error").inc();
                     String description = MessageFormat.format("Failed to perform cleanups in Indy for %s", groupName);
                     logger.error(description, e);
                 }
             }
         } catch (CleanerException ex) {
+            exceptionsTotal.labels("error").inc();
             logger.error("Error loading build record for group " + groupName + ". Skipping.", ex);
             ;
         }
@@ -225,12 +282,14 @@ public class FailedBuildsCleaner {
         Build build = getBuildRecord(groupName);
         boolean clean = false;
         if (build == null) {
+            exceptionsTotal.labels("warning").inc();
             logger.warn(
                     "Build record for group {} not found. Assuming it was removed by "
                             + "temporary builds cleaner before failed builds cleaner got to it. Cleaning...",
                     groupName);
             clean = true;
         } else if (failedStatuses.contains(build.getStatus()) && build.getEndTime().isBefore(session.getTo())) {
+            exceptionsTotal.labels("error").inc();
             logger.debug("Build record for group {} is older than the limit. Cleaning...", groupName);
             clean = true;
         }
@@ -265,6 +324,7 @@ public class FailedBuildsCleaner {
      * @return found build record or null
      */
     private Build getBuildRecord(String buildContentId) throws CleanerException {
+        Summary.Timer requestTimer = requestLatency.labels("getBuildRecord").startTimer();
         logger.debug("Looking for build record with query \"buildContentId==" + buildContentId + "\"");
 
         try {
@@ -272,10 +332,12 @@ public class FailedBuildsCleaner {
                     .getAll(null, null, Optional.empty(), Optional.of("buildContentId==" + buildContentId));
 
             if (builds.size() > 1) {
+                exceptionsTotal.labels("error").inc();
                 logger.error("Multiple build records found for buildContentId = {}", buildContentId);
                 return null;
 
             } else if (builds.size() == 0) {
+                exceptionsTotal.labels("warning").inc();
                 logger.warn("Build record NOT found for buildContentId = {}", buildContentId);
 
                 Matcher matcher = buildNumPattern.matcher(buildContentId);
@@ -283,20 +345,33 @@ public class FailedBuildsCleaner {
                     String id = matcher.group(1);
                     logger.debug("Attempting to find build record by id {}", id);
                     try {
-                        return buildClient.getSpecific(id);
+                        Build res = buildClient.getSpecific(id);
+                        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_getBuildRecord");
+                        if (lcyMap != null) {
+                            lcyMap.update(requestTimer.observeDuration());
+                        }
+                        return res;
                     } catch (RemoteResourceNotFoundException e) {
+                        exceptionsTotal.labels("warning").inc();
                         logger.warn("Build record NOT found even by ID = {}", id);
                         return null;
                     }
                 } else {
+                    exceptionsTotal.labels("error").inc();
                     logger.error("Unable ot parse buildContentId=%s", buildContentId);
                     return null;
                 }
             } else {
                 logger.debug("Build with buildContentId = {} found.");
-                return builds.iterator().next();
+                Build res = builds.iterator().next();
+                LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_getBuildRecord");
+                if (lcyMap != null) {
+                    lcyMap.update(requestTimer.observeDuration());
+                }
+                return res;
             }
         } catch (RemoteResourceException e) {
+            exceptionsTotal.labels("error").inc();
             throw new CleanerException(
                     "Error when getting build record [buildContentId=%s, status=%d].",
                     e,
@@ -315,6 +390,8 @@ public class FailedBuildsCleaner {
      */
     private void deleteGroupAndHostedRepo(String pkgKey, String repoName, IndyStoresClientModule stores)
             throws IndyClientException {
+        Summary.Timer requestTimer = requestLatency.labels("deleteGroupAndHostedRepo").startTimer();
+
         StoreKey groupKey = new StoreKey(pkgKey, StoreType.group, repoName);
         if (stores.exists(groupKey)) {
             logger.trace("{} group {} exists - deleting...", pkgKey, repoName);
@@ -326,5 +403,24 @@ public class FailedBuildsCleaner {
             logger.trace("{} hosted repo {} exists - deleting...", pkgKey, repoName);
             stores.delete(storeKey, "Scheduled cleanup of failed builds.");
         }
+
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_deleteGroupAndHostedRepo");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "FailedBuildsCleaner_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "FailedBuildsCleaner_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }

@@ -26,10 +26,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.metrics.MetricUnits;
 import org.eclipse.microprofile.metrics.annotation.ConcurrentGauge;
+import org.jboss.pnc.cleaner.common.LatencyMap;
 import org.jboss.pnc.dto.response.DeleteOperationResult;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 
 import javax.ws.rs.GET;
 import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -53,7 +56,12 @@ public class DeleteCallbackManager {
     static final Summary requestLatency = Summary.build()
             .name("DeleteCallbackManager_Requests_Latency")
             .help("Request latency in seconds")
+            .labelNames("method")
             .register();
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
+
+    static final String className = "DeleteCallbackManager";
 
     private Map<String, CallbackData> buildsMap = new ConcurrentHashMap<>();
 
@@ -104,7 +112,7 @@ public class DeleteCallbackManager {
      * @throws InterruptedException Thrown if an error occurs while waiting for callback
      */
     public DeleteOperationResult await(String buildId) throws InterruptedException {
-        Summary.Timer requestTimer = requestLatency.startTimer();
+        Summary.Timer requestTimer = requestLatency.labels("await").startTimer();
         CallbackData callbackData = buildsMap.get(buildId);
         if (callbackData == null) {
             exceptionsTotal.labels("error").inc();
@@ -116,7 +124,10 @@ public class DeleteCallbackManager {
         callbackData.getCountDownLatch().await(MAX_WAIT_TIME, TimeUnit.SECONDS);
         buildsMap.remove(buildId);
         DeleteOperationResult rc = callbackData.getCallbackResponse();
-        requestTimer.observeDuration();
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_await");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
         return rc;
     }
 
@@ -133,15 +144,15 @@ public class DeleteCallbackManager {
     }
 
     @GET
-    @Produces("text/plain")
-    @ConcurrentGauge(name = "DeleteCallbackManager_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    @Produces(MediaType.TEXT_PLAIN)
+    @ConcurrentGauge(name = "DeleteCallbackManager_Err_Count", description = "Errors count")
     public int showCurrentErrCount() {
         return (int) exceptionsTotal.labels("error").get();
     }
 
     @GET
-    @Produces("text/plain")
-    @ConcurrentGauge(name = "DeleteCallbackManager_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    @Produces(MediaType.TEXT_PLAIN)
+    @ConcurrentGauge(name = "DeleteCallbackManager_Warn_Count", description = "Warnings count")
     public int showCurrentWarnCount() {
         return (int) exceptionsTotal.labels("warning").get();
     }

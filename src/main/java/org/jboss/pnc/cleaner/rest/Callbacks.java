@@ -17,17 +17,23 @@
  */
 package org.jboss.pnc.cleaner.rest;
 
+import org.eclipse.microprofile.metrics.annotation.Counted;
+import org.jboss.pnc.cleaner.common.LatencyMap;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.jboss.pnc.cleaner.temporaryBuilds.BuildDeleteCallbackManager;
 import org.jboss.pnc.cleaner.temporaryBuilds.BuildGroupDeleteCallbackManager;
 import org.jboss.pnc.dto.response.DeleteOperationResult;
 
 import javax.inject.Inject;
 import javax.ws.rs.Consumes;
+import javax.ws.rs.Produces;
+import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import java.util.Map;
 
 /**
  * @author Jakub Bartecek
@@ -40,6 +46,8 @@ public class Callbacks {
 
     @Inject
     BuildGroupDeleteCallbackManager buildGroupDeleteCallbackManager;
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
 
     @Path("/delete/builds/{buildId}")
     @POST
@@ -59,5 +67,22 @@ public class Callbacks {
             DeleteOperationResult deleteOperation) {
         buildGroupDeleteCallbackManager.callback(buildId, deleteOperation);
         return Response.ok().build();
+    }
+
+    @Path("/latency/{clazz}/{method}")
+    @GET
+    @Consumes(MediaType.TEXT_PLAIN)
+    @Produces(MediaType.TEXT_PLAIN)
+    @Counted(name = "showLatency", description = "current low/high latencies for a given class method")
+    public String showLatency(
+            @org.jboss.resteasy.annotations.jaxrs.PathParam String clazz,
+            @org.jboss.resteasy.annotations.jaxrs.PathParam String method) {
+        String classMethod = clazz + "_" + method;
+        LatencyMiniMax latencyMiniMax = methodLatencyMap.get(classMethod);
+        if (latencyMiniMax != null) {
+            return classMethod + " " + latencyMiniMax.toString();
+        } else {
+            return "Latency map key not found for method '" + classMethod + "'";
+        }
     }
 }
