@@ -16,6 +16,16 @@ public class LatencyMap {
         methodLatencyMap.put("FailedBuildsCleaner_cleanBuildIfNeeded", new LatencyMiniMax());
         methodLatencyMap.put("FailedBuildsCleaner_getBuildRecord", new LatencyMiniMax());
         methodLatencyMap.put("FailedBuildsCleaner_deleteGroupAndHostedRepo", new LatencyMiniMax());
+
+        methodLatencyMap.put("TemporaryBuildsCleanerAdapterImpl_findTemporaryBuildsOlderThan", new LatencyMiniMax());
+        methodLatencyMap.put("TemporaryBuildsCleanerAdapterImpl_deleteTemporaryBuild", new LatencyMiniMax());
+        methodLatencyMap
+                .put("TemporaryBuildsCleanerAdapterImpl_findTemporaryGroupBuildsOlderThan", new LatencyMiniMax());
+        methodLatencyMap.put("TemporaryBuildsCleanerAdapterImpl_deleteTemporaryGroupBuild", new LatencyMiniMax());
+        methodLatencyMap.put("TemporaryBuildsCleanerAdapterImpl_formatTimestampForRsql", new LatencyMiniMax());
+
+        methodLatencyMap.put("TemporaryBuildsCleanerImpl_deleteExpiredBuildConfigSetRecords", new LatencyMiniMax());
+        methodLatencyMap.put("TemporaryBuildsCleanerImpl_deleteExpiredBuildRecords", new LatencyMiniMax());
     }
 
     public static LatencyMap getInstance() {

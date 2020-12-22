@@ -19,11 +19,14 @@ package org.jboss.pnc.cleaner.temporaryBuilds;
 
 import io.prometheus.client.Counter;
 
+import io.prometheus.client.Summary;
 import lombok.extern.slf4j.Slf4j;
 
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.metrics.MetricUnits;
 import org.eclipse.microprofile.metrics.annotation.Gauge;
+import org.jboss.pnc.cleaner.common.LatencyMap;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.jboss.pnc.client.BuildClient;
 import org.jboss.pnc.client.GroupBuildClient;
 import org.jboss.pnc.client.RemoteCollection;
@@ -37,6 +40,7 @@ import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -44,6 +48,7 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -59,6 +64,16 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             .help("Errors and Warnings counting metric")
             .labelNames("severity")
             .register();
+
+    static final Summary requestLatency = Summary.build()
+            .name("TemporaryBuildsCleanerAdapterImpl_Requests_Latency")
+            .help("Request latency in seconds")
+            .labelNames("method")
+            .register();
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
+
+    static final String className = "TemporaryBuildsCleanerAdapterImpl";
 
     private String BASE_DELETE_BUILD_CALLBACK_URL;
 
@@ -89,6 +104,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
 
     @Override
     public Collection<Build> findTemporaryBuildsOlderThan(Date expirationDate) {
+        Summary.Timer requestTimer = requestLatency.labels("findTemporaryBuildsOlderThan").startTimer();
         Collection<Build> buildsRest = new HashSet<>();
 
         try {
@@ -104,17 +120,26 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             return buildsRest;
         }
 
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_findTemporaryBuildsOlderThan");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
         return buildsRest;
     }
 
     @Override
     public void deleteTemporaryBuild(String id) throws OrchInteractionException {
+        Summary.Timer requestTimer = requestLatency.labels("deleteTemporaryBuild").startTimer();
         buildDeleteCallbackManager.initializeHandler(id);
         try {
             buildClient.delete(id, BASE_DELETE_BUILD_CALLBACK_URL + id);
             DeleteOperationResult result = buildDeleteCallbackManager.await(id);
 
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
+                LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_deleteTemporaryBuild");
+                if (lcyMap != null) {
+                    lcyMap.update(requestTimer.observeDuration());
+                }
                 return;
             } else {
                 exceptionsTotal.labels("error").inc();
@@ -146,6 +171,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
 
     @Override
     public Collection<GroupBuild> findTemporaryGroupBuildsOlderThan(Date expirationDate) {
+        Summary.Timer requestTimer = requestLatency.labels("findTemporaryGroupBuildsOlderThan").startTimer();
         Collection<GroupBuild> groupBuilds = new HashSet<>();
         try {
             RemoteCollection<GroupBuild> remoteCollection = groupBuildClient.getAll(
@@ -162,11 +188,16 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
                     e.getResponse().orElse(null));
         }
 
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_findTemporaryGroupBuildsOlderThan");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
         return groupBuilds;
     }
 
     @Override
     public void deleteTemporaryGroupBuild(String id) throws OrchInteractionException {
+        Summary.Timer requestTimer = requestLatency.labels("deleteTemporaryGroupBuild").startTimer();
         buildGroupDeleteCallbackManager.initializeHandler(id);
 
         try {
@@ -174,6 +205,10 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
             DeleteOperationResult result = buildGroupDeleteCallbackManager.await(id);
 
             if (result != null && result.getStatus() != null && result.getStatus().isSuccess()) {
+                LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_deleteTemporaryGroupBuild");
+                if (lcyMap != null) {
+                    lcyMap.update(requestTimer.observeDuration());
+                }
                 return;
             } else {
                 exceptionsTotal.labels("error").inc();
@@ -206,20 +241,26 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
     }
 
     private String formatTimestampForRsql(Date expirationDate) {
-        return DateTimeFormatter.ISO_DATE_TIME.withLocale(Locale.ROOT)
+        Summary.Timer requestTimer = requestLatency.labels("formatTimestampForRsql").startTimer();
+        String res = DateTimeFormatter.ISO_DATE_TIME.withLocale(Locale.ROOT)
                 .withZone(ZoneId.of("UTC"))
                 .format(Instant.ofEpochMilli(expirationDate.getTime()));
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_formatTimestampForRsql");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
+        return res;
     }
 
     @GET
-    @Produces("text/plain")
+    @Produces(MediaType.TEXT_PLAIN)
     @Gauge(name = "TemporaryBuildsCleanerAdapterImpl_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
     public int showCurrentErrCount() {
         return (int) exceptionsTotal.labels("error").get();
     }
 
     @GET
-    @Produces("text/plain")
+    @Produces(MediaType.TEXT_PLAIN)
     @Gauge(
             name = "TemporaryBuildsCleanerAdapterImpl_Warn_Count",
             unit = MetricUnits.NONE,

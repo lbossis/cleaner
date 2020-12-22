@@ -22,6 +22,8 @@ import io.prometheus.client.Summary;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.metrics.MetricUnits;
 import org.eclipse.microprofile.metrics.annotation.Gauge;
+import org.jboss.pnc.cleaner.common.LatencyMap;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.jboss.pnc.common.util.TimeUtils;
 import org.jboss.pnc.dto.Build;
 import org.jboss.pnc.dto.GroupBuild;
@@ -32,10 +34,12 @@ import javax.enterprise.context.ApplicationScoped;
 import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Map;
 
 /**
  * Deletes temporary builds via Orchestrator REST API
@@ -55,6 +59,10 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
             .help("Request latency in seconds")
             .labelNames("expired_build_records_type")
             .register();
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
+
+    static final String className = "TemporaryBuildsCleanerImpl";
 
     private final Logger log = LoggerFactory.getLogger(TemporaryBuildsCleanerImpl.class);
 
@@ -78,7 +86,7 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
     }
 
     void deleteExpiredBuildConfigSetRecords(Date expirationThreshold) {
-        Summary.Timer requestTimer = requestLatency.labels("config_set_records").startTimer();
+        Summary.Timer requestTimer = requestLatency.labels("deleteExpiredBuildConfigSetRecords").startTimer();
         Collection<GroupBuild> expiredBCSRecords = temporaryBuildsCleanerAdapter
                 .findTemporaryGroupBuildsOlderThan(expirationThreshold);
 
@@ -92,11 +100,14 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
                 log.warn("Deletion of temporary BuildConfigSetRecord {} failed!", groupBuild);
             }
         }
-        requestTimer.observeDuration();
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_deleteExpiredBuildConfigSetRecords");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
     }
 
     void deleteExpiredBuildRecords(Date expirationThreshold) {
-        Summary.Timer requestTimer = requestLatency.labels("records").startTimer();
+        Summary.Timer requestTimer = requestLatency.labels("deleteExpiredBuildRecords").startTimer();
         Set<Build> failedBuilds = new HashSet<>();
         Collection<Build> expiredBuilds = null;
         do {
@@ -116,13 +127,23 @@ public class TemporaryBuildsCleanerImpl implements TemporaryBuildsCleaner {
             }
         } while (!expiredBuilds.isEmpty());
 
-        requestTimer.observeDuration();
+        LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_deleteExpiredBuildRecords");
+        if (lcyMap != null) {
+            lcyMap.update(requestTimer.observeDuration());
+        }
     }
 
     @GET
-    @Produces("text/plain")
+    @Produces(MediaType.TEXT_PLAIN)
     @Gauge(name = "TemporaryBuildsCleanerImpl_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
     public int showCurrentWarnCount() {
         return (int) exceptionsTotal.labels("warning").get();
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "TemporaryBuildsCleanerImpl_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
     }
 }
