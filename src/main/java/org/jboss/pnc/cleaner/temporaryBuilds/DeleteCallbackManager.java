@@ -26,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.metrics.MetricUnits;
 import org.eclipse.microprofile.metrics.annotation.ConcurrentGauge;
+import org.eclipse.microprofile.metrics.annotation.Timed;
 import org.jboss.pnc.cleaner.common.LatencyMap;
 import org.jboss.pnc.dto.response.DeleteOperationResult;
 import org.jboss.pnc.cleaner.common.LatencyMiniMax;
@@ -111,6 +112,7 @@ public class DeleteCallbackManager {
      * @return Result of the operation or null if the callback was not triggered
      * @throws InterruptedException Thrown if an error occurs while waiting for callback
      */
+    @Timed
     public DeleteOperationResult await(String buildId) throws InterruptedException {
         Summary.Timer requestTimer = requestLatency.labels("await").startTimer();
         CallbackData callbackData = buildsMap.get(buildId);

@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.metrics.MetricUnits;
 import org.eclipse.microprofile.metrics.annotation.Gauge;
+import org.eclipse.microprofile.metrics.annotation.Timed;
 import org.jboss.pnc.cleaner.common.LatencyMap;
 import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.jboss.pnc.client.BuildClient;
@@ -102,6 +103,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
         BASE_DELETE_BUILD_GROUP_CALLBACK_URL = host + "/callbacks/delete/group-builds/";
     }
 
+    @Timed
     @Override
     public Collection<Build> findTemporaryBuildsOlderThan(Date expirationDate) {
         Summary.Timer requestTimer = requestLatency.labels("findTemporaryBuildsOlderThan").startTimer();
@@ -127,6 +129,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
         return buildsRest;
     }
 
+    @Timed
     @Override
     public void deleteTemporaryBuild(String id) throws OrchInteractionException {
         Summary.Timer requestTimer = requestLatency.labels("deleteTemporaryBuild").startTimer();
@@ -169,6 +172,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
 
     }
 
+    @Timed
     @Override
     public Collection<GroupBuild> findTemporaryGroupBuildsOlderThan(Date expirationDate) {
         Summary.Timer requestTimer = requestLatency.labels("findTemporaryGroupBuildsOlderThan").startTimer();
@@ -195,6 +199,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
         return groupBuilds;
     }
 
+    @Timed
     @Override
     public void deleteTemporaryGroupBuild(String id) throws OrchInteractionException {
         Summary.Timer requestTimer = requestLatency.labels("deleteTemporaryGroupBuild").startTimer();
@@ -240,6 +245,7 @@ public class TemporaryBuildsCleanerAdapterImpl implements TemporaryBuildsCleaner
         }
     }
 
+    @Timed
     private String formatTimestampForRsql(Date expirationDate) {
         Summary.Timer requestTimer = requestLatency.labels("formatTimestampForRsql").startTimer();
         String res = DateTimeFormatter.ISO_DATE_TIME.withLocale(Locale.ROOT)

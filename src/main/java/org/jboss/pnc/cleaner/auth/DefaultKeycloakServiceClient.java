@@ -17,7 +17,11 @@
  */
 package org.jboss.pnc.cleaner.auth;
 
+import io.prometheus.client.Counter;
+import io.prometheus.client.Summary;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.pnc.cleaner.common.LatencyMap;
+import org.jboss.pnc.cleaner.common.LatencyMiniMax;
 import org.keycloak.representations.AccessTokenResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,12 +30,29 @@ import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.inject.spi.CDI;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 
 /**
  * @author <a href="mailto:matejonnet@gmail.com">Matej Lazar</a>
  */
 @ApplicationScoped
 public class DefaultKeycloakServiceClient implements KeycloakServiceClient {
+
+    static final Counter exceptionsTotal = Counter.build()
+            .name("DefaultKeycloakServiceClient_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
+
+    static final Summary requestLatency = Summary.build()
+            .name("DefaultKeycloakServiceClient_Requests_Latency")
+            .help("Request latency in seconds")
+            .labelNames("key")
+            .register();
+
+    static final Map<String, LatencyMiniMax> methodLatencyMap = LatencyMap.getInstance().getMethodLatencyMap();
+
+    static final String className = "DefaultKeycloakServiceClient";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
@@ -72,6 +93,7 @@ public class DefaultKeycloakServiceClient implements KeycloakServiceClient {
     @Override
     public String getAuthToken() {
         if (keycloakToken == null || refreshRequired()) {
+            Summary.Timer requestTimer = requestLatency.labels("getAuthToken").startTimer();
             logger.debug(
                     "Requesting new service account auth token using values:\n" + "authServerUrl {}\n" + "realm {}\n"
                             + "resource {}\n" + "secret {}\n" + "sslRequired {}",
@@ -82,6 +104,10 @@ public class DefaultKeycloakServiceClient implements KeycloakServiceClient {
                     sslRequired);
             keycloakToken = KeycloakClient.getAuthTokensBySecret(authServerUrl, realm, resource, secret, sslRequired);
             expiresAt = Instant.now().plus(keycloakToken.getExpiresIn(), ChronoUnit.SECONDS);
+            LatencyMiniMax lcyMap = methodLatencyMap.get(className + "_getAuthToken");
+            if (lcyMap != null) {
+                lcyMap.update(requestTimer.observeDuration());
+            }
         }
         return keycloakToken.getToken();
     }

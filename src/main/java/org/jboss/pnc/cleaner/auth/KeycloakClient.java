@@ -17,10 +17,16 @@
  */
 package org.jboss.pnc.cleaner.auth;
 
+import io.prometheus.client.Counter;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
 import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.util.BasicAuthHelper;
 import org.keycloak.util.JsonSerialization;
 
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
@@ -35,6 +41,12 @@ import static org.jboss.pnc.cleaner.auth.keycloakutil.util.HttpUtil.urlencode;
  * @author <a href="mailto:matejonnet@gmail.com">Matej Lazar</a>
  */
 class KeycloakClient {
+
+    static final Counter exceptionsTotal = Counter.build()
+            .name("KeycloakClient_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
 
     static AccessTokenResponse getAuthTokensBySecret(
             String server,
@@ -57,6 +69,7 @@ class KeycloakClient {
         try {
             if (user != null) {
                 if (password == null) {
+                    exceptionsTotal.labels("error").inc();
                     throw new RuntimeException("No password specified");
                 }
 
@@ -81,9 +94,25 @@ class KeycloakClient {
             return JsonSerialization.readValue(result, AccessTokenResponse.class);
 
         } catch (UnsupportedEncodingException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Unexpected error: ", e);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Error receiving response: ", e);
         }
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "KeycloakClient_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "KeycloakClient_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }
