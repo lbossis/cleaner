@@ -17,6 +17,14 @@
  */
 package org.jboss.pnc.cleaner.auth.keycloakutil.util;
 
+import io.prometheus.client.Counter;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
+import org.eclipse.microprofile.metrics.annotation.Timed;
+
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -46,7 +54,14 @@ import static java.nio.file.Files.isRegularFile;
 /**
  * @author <a href="mailto:mstrukel@redhat.com">Marko Strukelj</a>
  */
+@Timed
 public class IoUtil {
+
+    static final Counter exceptionsTotal = Counter.build()
+            .name("IoUtil_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
 
     public static String readFileOrStdin(String file) {
         String content;
@@ -56,8 +71,10 @@ public class IoUtil {
             try (InputStream is = new FileInputStream(file)) {
                 content = readFully(is);
             } catch (FileNotFoundException e) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("File not found: " + file);
             } catch (IOException e) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("Failed to read file: " + file, e);
             }
         }
@@ -68,6 +85,7 @@ public class IoUtil {
         try {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Interrupted");
         }
     }
@@ -83,6 +101,7 @@ public class IoUtil {
                 out.append(new String(buf, 0, rc, charset));
             }
         } catch (Exception e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to read stream", e);
         }
         return out.toString();
@@ -98,11 +117,13 @@ public class IoUtil {
                 os.write(buf, 0, rc);
             }
         } catch (Exception e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to read/write a stream: ", e);
         } finally {
             try {
                 os.flush();
             } catch (IOException e) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("Failed to write a stream: ", e);
             }
         }
@@ -122,6 +143,7 @@ public class IoUtil {
             } else if (supportedViews.contains("acl")) {
                 setWindowsPermissions(parent);
             } else {
+                exceptionsTotal.labels("warning").inc();
                 warnErr("Failed to restrict access permissions on .keycloak directory: " + parent);
             }
         }
@@ -133,6 +155,7 @@ public class IoUtil {
             } else if (supportedViews.contains("acl")) {
                 setWindowsPermissions(path);
             } else {
+                exceptionsTotal.labels("warning").inc();
                 warnErr("Failed to restrict access permissions on config file: " + path);
             }
         }
@@ -199,5 +222,19 @@ public class IoUtil {
 
     public static void logOut(String msg) {
         System.out.println("LOG: " + msg);
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "IoUtil_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "IoUtil_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }

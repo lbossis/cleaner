@@ -19,6 +19,7 @@ package org.jboss.pnc.cleaner.auth.keycloakutil.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.prometheus.client.Counter;
 import org.apache.http.HeaderIterator;
 import org.apache.http.HttpHeaders;
 import org.apache.http.HttpResponse;
@@ -36,6 +37,9 @@ import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.ssl.SSLContexts;
+import org.eclipse.microprofile.metrics.MetricUnits;
+import org.eclipse.microprofile.metrics.annotation.Gauge;
+import org.eclipse.microprofile.metrics.annotation.Timed;
 import org.jboss.pnc.cleaner.auth.AuthenticationException;
 import org.jboss.pnc.cleaner.auth.keycloakutil.httpcomponents.HttpDelete;
 import org.jboss.pnc.cleaner.auth.keycloakutil.operations.LocalSearch;
@@ -45,6 +49,9 @@ import org.keycloak.util.JsonSerialization;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+import javax.ws.rs.GET;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -67,7 +74,14 @@ import static org.keycloak.common.util.ObjectUtil.capitalize;
 /**
  * @author <a href="mailto:mstrukel@redhat.com">Marko Strukelj</a>
  */
+@Timed
 public class HttpUtil {
+
+    static final Counter exceptionsTotal = Counter.build()
+            .name("HttpUtil_Exceptions_Total")
+            .help("Errors and Warnings counting metric")
+            .labelNames("severity")
+            .register();
 
     public static final String APPLICATION_XML = "application/xml";
     public static final String APPLICATION_JSON = "application/json";
@@ -84,6 +98,7 @@ public class HttpUtil {
             request.setHeader(HttpHeaders.ACCEPT, acceptType);
             return doRequest(authorization, request);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to send request - " + e.getMessage(), e);
         }
     }
@@ -97,6 +112,7 @@ public class HttpUtil {
         try {
             return doPostOrPut(contentType, acceptType, content, authorization, new HttpPost(url));
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to send request - " + e.getMessage(), e);
         }
     }
@@ -110,6 +126,7 @@ public class HttpUtil {
         try {
             return doPostOrPut(contentType, acceptType, content, authorization, new HttpPut(url));
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to send request - " + e.getMessage(), e);
         }
     }
@@ -119,6 +136,7 @@ public class HttpUtil {
             HttpDelete request = new HttpDelete(url);
             doRequest(authorization, request);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to send request - " + e.getMessage(), e);
         }
     }
@@ -167,6 +185,7 @@ public class HttpUtil {
 
         if (request.getBody() != null) {
             if (req instanceof HttpEntityEnclosingRequestBase == false) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("Request type does not support body: " + type);
             }
             ((HttpEntityEnclosingRequestBase) req).setEntity(new InputStreamEntity(request.getBody()));
@@ -237,6 +256,7 @@ public class HttpUtil {
                     error = JsonSerialization.readValue(responseStream, Map.class);
                 }
             } catch (Exception e) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("Failed to read error response - " + e.getMessage(), e);
             } finally {
                 responseStream.close();
@@ -246,6 +266,7 @@ public class HttpUtil {
             if (error != null) {
                 message = error.get("error_description") + " [" + error.get("error") + "]";
             }
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException(
                     message != null ? message
                             : response.getStatusLine().getStatusCode() + " "
@@ -290,8 +311,10 @@ public class HttpUtil {
                         }
                     } }, new SecureRandom());
                 } catch (NoSuchAlgorithmException ex) {
+                    exceptionsTotal.labels("error").inc();
                     throw new AuthenticationException("Cannot get SSLContext instance for \"SSL\" protocol.", ex);
                 } catch (KeyManagementException ex) {
+                    exceptionsTotal.labels("error").inc();
                     throw new AuthenticationException("SSLContext initialization failed.", ex);
                 }
 
@@ -306,6 +329,7 @@ public class HttpUtil {
         try {
             return URLEncoder.encode(value, UTF_8);
         } catch (UnsupportedEncodingException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to urlencode", e);
         }
     }
@@ -350,6 +374,7 @@ public class HttpUtil {
         }
 
         if (queryParams.length % 2 != 0) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Value missing for query parameter: " + queryParams[queryParams.length - 1]);
         }
 
@@ -374,6 +399,7 @@ public class HttpUtil {
                 }
                 query.append(params.getKey()).append("=").append(URLEncoder.encode(params.getValue(), "utf-8"));
             } catch (Exception e) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException(
                         "Failed to encode query params: " + params.getKey() + "=" + params.getValue());
             }
@@ -404,6 +430,7 @@ public class HttpUtil {
             response.checkSuccess();
         } catch (HttpResponseException e) {
             if (e.getStatusCode() == 404) {
+                exceptionsTotal.labels("error").inc();
                 throw new RuntimeException("Resource not found for url: " + url, e);
             }
             throw e;
@@ -422,6 +449,7 @@ public class HttpUtil {
         try {
             response = HttpUtil.doRequest("get", resourceUrl, new HeadersBody(headers));
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("HTTP request failed: GET " + resourceUrl, e);
         }
 
@@ -431,6 +459,7 @@ public class HttpUtil {
         try {
             result = JsonSerialization.readValue(response.getBody(), type);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to read JSON response", e);
         }
 
@@ -450,6 +479,7 @@ public class HttpUtil {
         try {
             body = JsonSerialization.writeValueAsBytes(content);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to serialize JSON", e);
         }
 
@@ -457,6 +487,7 @@ public class HttpUtil {
             response = HttpUtil
                     .doRequest("post", resourceUrl, new HeadersBody(headers, new ByteArrayInputStream(body)));
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("HTTP request failed: POST " + resourceUrl + "\n" + new String(body), e);
         }
 
@@ -476,6 +507,7 @@ public class HttpUtil {
         try {
             body = JsonSerialization.writeValueAsBytes(content);
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Failed to serialize JSON", e);
         }
 
@@ -483,6 +515,7 @@ public class HttpUtil {
             response = HttpUtil
                     .doRequest("delete", resourceUrl, new HeadersBody(headers, new ByteArrayInputStream(body)));
         } catch (IOException e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("HTTP request failed: DELETE " + resourceUrl + "\n" + new String(body), e);
         }
 
@@ -518,16 +551,19 @@ public class HttpUtil {
         try {
             user = new LocalSearch(users).exactMatchOne(attrValue, attrName);
         } catch (Exception e) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Multiple " + resourceEndpoint + " found for " + attrName + ": " + attrValue, e);
         }
 
         String typeName = singularize(resourceEndpoint);
         if (user == null) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException(capitalize(typeName) + " not found for " + attrName + ": " + attrValue);
         }
 
         JsonNode attr = user.get(returnAttrName);
         if (attr == null) {
+            exceptionsTotal.labels("error").inc();
             throw new RuntimeException("Returned " + typeName + " info has no '" + returnAttrName + "' attribute");
         }
         return attr.asText();
@@ -535,5 +571,19 @@ public class HttpUtil {
 
     public static String singularize(String value) {
         return value.substring(0, value.length() - 1);
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "HttpUtil_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
+    public int showCurrentErrCount() {
+        return (int) exceptionsTotal.labels("error").get();
+    }
+
+    @GET
+    @Produces(MediaType.TEXT_PLAIN)
+    @Gauge(name = "HttpUtil_Warn_Count", unit = MetricUnits.NONE, description = "Warnings count")
+    public int showCurrentWarnCount() {
+        return (int) exceptionsTotal.labels("warning").get();
     }
 }
