@@ -93,6 +93,10 @@ public class FailedBuildsCleanerSession {
         return to;
     }
 
+    // @FIXME
+    // Test case org.jboss.pnc.cleaner.logverifier.LogVerifierTest.java
+    // fails if two methods below are not commented out
+    //
     // @GET
     // @Produces(MediaType.TEXT_PLAIN)
     // @Gauge(name = "FailedBuildsCleanerSession_Err_Count", unit = MetricUnits.NONE, description = "Errors count")
